@@ -195,12 +195,37 @@ app.post('/api/analyze', async (req, res) => {
             },
           },
           {
-            text: "Analyze this food image and return ONLY JSON with fields: food_name, ingredients (array), nutrition (calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), health_recommendation (should_consume, reason)."
+            text: `
+Analyze this food image.
+
+Return ONLY a VALID JSON object.
+Do NOT include any explanation or extra text.
+
+STRICT FORMAT:
+{
+  "food_name": string,
+  "ingredients": string[],
+  "nutrition": {
+    "calories": number,
+    "protein_g": number,
+    "fat_g": number,
+    "carbs_g": number,
+    "sugar_g": number,
+    "fiber_g": number
+  },
+  "health_recommendation": {
+    "should_consume": boolean,
+    "reason": string
+  }
+}
+
+Ensure JSON is COMPLETE and properly closed.
+`
           }
         ]
       }],
       generationConfig: {
-        maxOutputTokens: 500,
+        maxOutputTokens: 1000,
         temperature: 0.2,
       }
     });
@@ -214,27 +239,61 @@ app.post('/api/analyze', async (req, res) => {
     // ✅ 🔥 Extract JSON safely (MAIN FIX)
     const match = text.match(/\{[\s\S]*\}/);
 
-    if (!match) {
-      console.error("❌ INVALID AI RESPONSE:", text);
-      return res.status(500).json({ error: "Invalid AI response format" });
+if (!match) {
+  console.error("❌ INVALID AI RESPONSE:", text);
+
+  return res.json({
+    food_name: "Unknown Food",
+    ingredients: [],
+    nutrition: {
+      calories: 0,
+      protein_g: 0,
+      fat_g: 0,
+      carbs_g: 0,
+      sugar_g: 0,
+      fiber_g: 0
+    },
+    confidence: 0.5,
+    health_recommendation: {
+      should_consume: true,
+      reason: "Could not analyze properly"
     }
+  });
+}
 
-    let data;
+let data;
 
-    try {
-      data = JSON.parse(match[0]);
-    } catch (err) {
-      console.error("❌ JSON PARSE ERROR:", match[0]);
-      return res.status(500).json({ error: "JSON parse failed" });
+try {
+  data = JSON.parse(match[0]);
+} catch (err) {
+  console.error("❌ JSON PARSE ERROR:", match[0]);
+
+  return res.json({
+    food_name: "Unknown Food",
+    ingredients: [],
+    nutrition: {
+      calories: 0,
+      protein_g: 0,
+      fat_g: 0,
+      carbs_g: 0,
+      sugar_g: 0,
+      fiber_g: 0
+    },
+    confidence: 0.5,
+    health_recommendation: {
+      should_consume: true,
+      reason: "Parsing failed"
     }
+  });
+}
 
-    // ✅ Return clean JSON
-    res.json(data);
+// ✅ ONLY ONE RESPONSE
+return res.json(data);
 
-  } catch (error) {
-    console.error('❌ AI Analysis Error:', error);
-    res.status(500).json({ error: 'AI analysis failed' });
-  }
+} catch (error) {
+  console.error('❌ AI Analysis Error:', error);
+  return res.status(500).json({ error: 'AI analysis failed' });
+}
 });
 
 // ✅ GLOBAL ERROR HANDLER (Ensures JSON instead of HTML)
