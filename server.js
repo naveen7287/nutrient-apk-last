@@ -185,34 +185,12 @@ app.post('/api/analyze', async (req, res) => {
     let match = null;
     let success = false;
 
-    // 🔥 FULL RETRY SYSTEM
-    for (let attempt = 0; attempt < 2 && !success; attempt++) {
+    // 🔥 FINAL RETRY SYSTEM (STRONG)
+    for (let attempt = 0; attempt < 3 && !success; attempt++) {
 
-      // 🔁 Change prompt slightly on retry
       const prompt = attempt === 0
-        ? `Analyze this food image.
-
-Return ONLY VALID JSON.
-NO text outside JSON.
-
-FORMAT:
-{
-  "food_name": string,
-  "ingredients": string[],
-  "nutrition": {
-    "calories": number,
-    "protein_g": number,
-    "fat_g": number,
-    "carbs_g": number,
-    "sugar_g": number,
-    "fiber_g": number
-  },
-  "health_recommendation": {
-    "should_consume": boolean,
-    "reason": string
-  }
-}`
-        : `STRICT: Return ONLY COMPLETE JSON. No explanation. Ensure JSON is closed properly with }.`;
+        ? `Analyze this food image and return ONLY valid JSON.`
+        : `STRICT: Return COMPLETE VALID JSON only. Do NOT cut response. Ensure JSON closes properly.`;
 
       for (const name of modelList) {
         try {
@@ -247,15 +225,22 @@ FORMAT:
           // Clean markdown
           text = text.replace(/```json|```/g, "").trim();
 
-          // Extract JSON safely
+          // Extract JSON block
           match = text.match(/\{[\s\S]*\}/);
 
-          if (match && match[0].endsWith("}")) {
-            success = true;
-            break;
+          if (!match) {
+            console.log("⚠️ No JSON found, retrying...");
+            continue;
           }
 
-          console.log("⚠️ Invalid JSON, retrying...");
+          // ✅ REAL VALIDATION (MOST IMPORTANT FIX)
+          try {
+            JSON.parse(match[0]);
+            success = true;
+            break;
+          } catch {
+            console.log("⚠️ Invalid JSON structure, retrying...");
+          }
 
         } catch (err) {
           console.log(`❌ Model failed: ${name}`, err.message);
@@ -263,7 +248,7 @@ FORMAT:
       }
     }
 
-    // ❌ FINAL FAIL
+    // ❌ FINAL FAILURE
     if (!success || !match) {
       console.error("❌ FINAL FAILURE:", text);
       return res.json(getFallback("AI response incomplete"));
@@ -287,7 +272,7 @@ FORMAT:
 });
 
 
-// ✅ REQUIRED FALLBACK FUNCTION
+// ✅ FINAL FALLBACK (KEEP THIS)
 function getFallback(reason) {
   return {
     food_name: "Unknown Food",
