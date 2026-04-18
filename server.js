@@ -166,36 +166,43 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'Image missing' });
     }
 
-    // ✅ API Key Check
     if (!process.env.GEMINI_API_KEY) {
       console.error('[Analyze] GEMINI_API_KEY missing');
       return res.status(500).json({ error: 'Server configuration error: API key missing' });
     }
 
-    // ✅ Initialize Gemini INSIDE route (safe)
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash"
-    });
 
     const base64Data = image.includes('base64,')
       ? image.split('base64,')[1]
       : image;
 
-    console.log("[Analyze] Sending image to Gemini...");
+    console.log("🔍 Analyzing image...");
 
-    const result = await model.generateContent({
-      contents: [{
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType: "image/jpeg",
-            },
-          },
-          {
-            text: `
+    // ✅ MODEL FALLBACK SYSTEM (IMPORTANT)
+    const modelList = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+    let result;
+    let lastError;
+
+    for (const name of modelList) {
+      try {
+        console.log(`Trying model: ${name}`);
+
+        const model = genAI.getGenerativeModel({ model: name });
+
+        result = await model.generateContent({
+          contents: [{
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType: "image/jpeg",
+                },
+              },
+              {
+                text: `
 Analyze this food image.
 
 Return ONLY a VALID JSON object.
@@ -221,14 +228,28 @@ STRICT FORMAT:
 
 Ensure JSON is COMPLETE and properly closed.
 `
+              }
+            ]
+          }],
+          generationConfig: {
+            maxOutputTokens: 1000,
+            temperature: 0.2,
           }
-        ]
-      }],
-      generationConfig: {
-        maxOutputTokens: 1000,
-        temperature: 0.2,
+        });
+
+        break; // ✅ success → stop loop
+
+      } catch (err) {
+        console.log(`❌ Model failed: ${name}`, err.message);
+        lastError = err;
       }
-    });
+    }
+
+    // ❌ All models failed
+    if (!result) {
+      console.error("❌ All models failed", lastError);
+      return res.json(getFallback("AI unavailable"));
+    }
 
     const response = await result.response;
     let text = response.text();
@@ -236,66 +257,53 @@ Ensure JSON is COMPLETE and properly closed.
     // ✅ Clean markdown
     text = text.replace(/```json|```/g, "").trim();
 
-    // ✅ 🔥 Extract JSON safely (MAIN FIX)
+    // ✅ Extract JSON safely
     const match = text.match(/\{[\s\S]*\}/);
 
-if (!match) {
-  console.error("❌ INVALID AI RESPONSE:", text);
-
-  return res.json({
-    food_name: "Unknown Food",
-    ingredients: [],
-    nutrition: {
-      calories: 0,
-      protein_g: 0,
-      fat_g: 0,
-      carbs_g: 0,
-      sugar_g: 0,
-      fiber_g: 0
-    },
-    confidence: 0.5,
-    health_recommendation: {
-      should_consume: true,
-      reason: "Could not analyze properly"
+    if (!match) {
+      console.error("❌ INVALID AI RESPONSE:", text);
+      return res.json(getFallback("Invalid AI response"));
     }
-  });
-}
 
-let data;
+    let data;
 
-try {
-  data = JSON.parse(match[0]);
-} catch (err) {
-  console.error("❌ JSON PARSE ERROR:", match[0]);
-
-  return res.json({
-    food_name: "Unknown Food",
-    ingredients: [],
-    nutrition: {
-      calories: 0,
-      protein_g: 0,
-      fat_g: 0,
-      carbs_g: 0,
-      sugar_g: 0,
-      fiber_g: 0
-    },
-    confidence: 0.5,
-    health_recommendation: {
-      should_consume: true,
-      reason: "Parsing failed"
+    try {
+      data = JSON.parse(match[0]);
+    } catch (err) {
+      console.error("❌ JSON PARSE ERROR:", match[0]);
+      return res.json(getFallback("Parsing failed"));
     }
-  });
-}
 
-// ✅ ONLY ONE RESPONSE
-return res.json(data);
+    // ✅ SUCCESS
+    return res.json(data);
 
-} catch (error) {
-  console.error('❌ AI Analysis Error:', error);
-  return res.status(500).json({ error: 'AI analysis failed' });
-}
+  } catch (error) {
+    console.error('❌ AI Analysis Error:', error);
+    return res.json(getFallback("Server error"));
+  }
 });
 
+
+// ✅ GLOBAL FALLBACK FUNCTION
+function getFallback(reason) {
+  return {
+    food_name: "Unknown Food",
+    ingredients: [],
+    nutrition: {
+      calories: 0,
+      protein_g: 0,
+      fat_g: 0,
+      carbs_g: 0,
+      sugar_g: 0,
+      fiber_g: 0
+    },
+    confidence: 0.5,
+    health_recommendation: {
+      should_consume: true,
+      reason: reason || "Could not analyze properly"
+    }
+  };
+}
 // ✅ GLOBAL ERROR HANDLER (Ensures JSON instead of HTML)
 app.use((err, req, res, next) => {
   console.error('Global Server Error:', err);
