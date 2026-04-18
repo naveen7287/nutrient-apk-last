@@ -84,40 +84,74 @@ export default function Scanner({ profile, onLogAdded }: ScannerProps) {
   };
 
   const handleScan = async () => {
-    if (!image || !sourceType) return;
-    setScanning(true);
-    
-    try {
-      // Resize and compress image
-      const base64Data = await resizeImage(image);
-      
-      if (!base64Data) {
-        throw new Error("Failed to process image. Please try another photo.");
-      }
+  if (!image || !sourceType) return;
 
-      console.log(`[Scanner] Sending image to backend for analysis...`);
+  setScanning(true);
 
-      const data = await apiFetch('/api/analyze', {
-        method: 'POST',
-        body: JSON.stringify({
-          image: base64Data,
-        }),
-      });
+  try {
+    // ✅ Resize & compress image
+    const base64Data = await resizeImage(image);
 
-      console.log("ANALYSIS RESULT:", data);
-
-      setResult(data);
-      setEditedNutrition(data.nutrition);
-      setManualIngredients(data.ingredients || []);
-      setShowConfirm(true);
-      setIsEditingNutrition(false);
-    } catch (error) {
-      console.error('Scan error:', error);
-      alert(error instanceof Error ? error.message : 'Failed to analyze image. Please try again.');
-    } finally {
-      setScanning(false);
+    if (!base64Data) {
+      throw new Error("Failed to process image. Please try another photo.");
     }
-  };
+
+    console.log("[Scanner] Sending image to backend...");
+
+    // ✅ Call backend API
+    const data = await apiFetch('/api/analyze', {
+      method: 'POST',
+      body: JSON.stringify({
+        image: base64Data,
+      }),
+    });
+
+    console.log("ANALYSIS RESULT:", data);
+
+    // ✅ Validate response
+    if (!data || !data.food_name || !data.nutrition) {
+      throw new Error("Invalid response from server");
+    }
+
+    // ✅ Safe fallback values
+    const safeData = {
+      food_name: data.food_name || "Unknown Food",
+      ingredients: data.ingredients || [],
+      nutrition: {
+        calories: data.nutrition?.calories || 0,
+        protein_g: data.nutrition?.protein_g || 0,
+        fat_g: data.nutrition?.fat_g || 0,
+        carbs_g: data.nutrition?.carbs_g || 0,
+        sugar_g: data.nutrition?.sugar_g || 0,
+        fiber_g: data.nutrition?.fiber_g || 0,
+      },
+      confidence: data.confidence || 0.9,
+      health_recommendation: data.health_recommendation || {
+        should_consume: true,
+        reason: "No recommendation provided",
+      }
+    };
+
+    // ✅ Set state
+    setResult(safeData);
+    setEditedNutrition(safeData.nutrition);
+    setManualIngredients(safeData.ingredients);
+
+    setShowConfirm(true);
+    setIsEditingNutrition(false);
+
+  } catch (error) {
+    console.error("Scan error:", error);
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "Failed to analyze image. Please try again."
+    );
+  } finally {
+    setScanning(false);
+  }
+};
 
   const handleConfirm = async () => {
     if (!result || !editedNutrition) return;
@@ -284,7 +318,7 @@ export default function Scanner({ profile, onLogAdded }: ScannerProps) {
                       <h3 className="text-2xl font-black text-emerald-900">{result.food_name}</h3>
                     </div>
                     <div className="bg-white p-3 rounded-2xl shadow-sm">
-                      <span className="text-emerald-600 font-bold">{Math.round(result.confidence * 100)}% Match</span>
+                      <span className="text-emerald-600 font-bold">{Math.round((result.confidence || 0.9) * 100)}% Match</span>
                     </div>
                   </div>
 
@@ -399,6 +433,6 @@ export default function Scanner({ profile, onLogAdded }: ScannerProps) {
   );
 }
 
-function cn(...inputs: any[]) {
+function cn(...inputs) {
   return inputs.filter(Boolean).join(' ');
 }
