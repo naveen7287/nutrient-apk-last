@@ -1,7 +1,6 @@
-// Use the provided Render URL or fallback to same-origin for local testing
-export const API_BASE_URL = import.meta.env.VITE_APP_URL || import.meta.env.VITE_API_URL || "";
+export const API_BASE_URL = "https://nutriscan-backend-671q.onrender.com";
 
-export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
+export const apiFetch = async (endpoint, options = {}) => {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
   
   try {
@@ -27,29 +26,26 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
       } else {
         const errorText = await response.text();
         if (errorText.includes("<!DOCTYPE") || errorText.includes("<html")) {
-          const titleMatch = errorText.match(/<title>(.*?)<\/title>/i);
-          const title = titleMatch ? titleMatch[1] : "Unknown HTML Error";
-          errorMessage = `The server returned an HTML error page: "${title}".`;
-          errorDetails = "\nThis usually means the backend URL is incorrect, the server is down, or there is a proxy error.";
-        } else if (errorText.length < 150) {
-          errorMessage = errorText;
+          errorMessage = "Server returned HTML instead of JSON (backend issue)";
         }
       }
+
       throw new Error(`${errorMessage}${errorDetails}`);
     }
 
     if (!isJson) {
-      throw new Error("The server returned a non-JSON response. Please check the backend configuration.");
+      throw new Error("Server returned non-JSON response");
     }
 
     return response.json();
+
   } catch (error) {
     if (error instanceof Error) {
       if (error.message === 'Failed to fetch') {
-        throw new Error(`Connection Failed: Could not connect to ${url}. Please check your internet connection or backend status.`);
+        throw new Error(`Cannot connect to backend: ${url}`);
       }
       throw error;
     }
-    throw new Error('An unknown error occurred during fetch');
+    throw new Error('Unknown fetch error');
   }
 };
