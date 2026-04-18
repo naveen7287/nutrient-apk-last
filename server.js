@@ -12,8 +12,6 @@ const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // ✅ MIDDLEWARE
 app.use(cors());
@@ -163,17 +161,28 @@ app.get('/api/health', (req, res) => {
 app.post('/api/analyze', async (req, res) => {
   try {
     const { image } = req.body;
-    if (!image) return res.status(400).json({ error: 'Image missing' });
 
-    // API Key Safety Check
+    if (!image) {
+      return res.status(400).json({ error: 'Image missing' });
+    }
+
+    // ✅ API Key Check
     if (!process.env.GEMINI_API_KEY) {
-      console.error('[Analyze] GEMINI_API_KEY is missing in environment variables.');
+      console.error('[Analyze] GEMINI_API_KEY missing');
       return res.status(500).json({ error: 'Server configuration error: API key missing' });
     }
 
-    const base64Data = image.includes('base64,') ? image.split('base64,')[1] : image;
+    // ✅ Initialize Gemini INSIDE route (safe)
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash"
+    });
 
-    console.log(`[Analyze] Analyzing image with Gemini 1.5 Flash...`);
+    const base64Data = image.includes('base64,')
+      ? image.split('base64,')[1]
+      : image;
+
+    console.log("[Analyze] Sending image to Gemini...");
 
     const result = await model.generateContent({
       contents: [{
@@ -186,7 +195,7 @@ app.post('/api/analyze', async (req, res) => {
             },
           },
           {
-            text: "Analyze this food image. Identify the food name and estimate its nutritional values per serving. Return ONLY a JSON object with food_name, ingredients (array), nutrition (object with calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), and health_recommendation (object with should_consume and reason)."
+            text: "Analyze this food image and return ONLY JSON with fields: food_name, ingredients (array), nutrition (calories, protein_g, fat_g, carbs_g, sugar_g, fiber_g), health_recommendation (should_consume, reason)."
           }
         ]
       }],
@@ -198,19 +207,32 @@ app.post('/api/analyze', async (req, res) => {
 
     const response = await result.response;
     let text = response.text();
-    
-    // Clean markdown if present
+
+    // ✅ Clean markdown
     text = text.replace(/```json|```/g, "").trim();
 
-    try {
-      const data = JSON.parse(text);
-      res.json(data);
-    } catch (parseError) {
-      console.error('JSON Parse Error:', text);
-      return res.status(500).json({ error: 'Invalid AI response format' });
+    // ✅ 🔥 Extract JSON safely (MAIN FIX)
+    const match = text.match(/\{[\s\S]*\}/);
+
+    if (!match) {
+      console.error("❌ INVALID AI RESPONSE:", text);
+      return res.status(500).json({ error: "Invalid AI response format" });
     }
+
+    let data;
+
+    try {
+      data = JSON.parse(match[0]);
+    } catch (err) {
+      console.error("❌ JSON PARSE ERROR:", match[0]);
+      return res.status(500).json({ error: "JSON parse failed" });
+    }
+
+    // ✅ Return clean JSON
+    res.json(data);
+
   } catch (error) {
-    console.error('AI Analysis Error:', error);
+    console.error('❌ AI Analysis Error:', error);
     res.status(500).json({ error: 'AI analysis failed' });
   }
 });
