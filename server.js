@@ -163,12 +163,11 @@ app.post('/api/analyze', async (req, res) => {
     const { image } = req.body;
 
     if (!image) {
-      return res.status(400).json({ error: 'Image missing' });
+      return res.status(400).json({ error: "Image missing" });
     }
 
     if (!process.env.GEMINI_API_KEY) {
-      console.error('[Analyze] GEMINI_API_KEY missing');
-      return res.status(500).json({ error: 'Server configuration error: API key missing' });
+      return res.status(500).json({ error: "API key missing" });
     }
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -181,16 +180,42 @@ app.post('/api/analyze', async (req, res) => {
 
     const modelList = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
-    let text = "";
-    let match = null;
+    let data = null;
     let success = false;
 
-    // 🔥 FINAL RETRY SYSTEM (STRONG)
     for (let attempt = 0; attempt < 3 && !success; attempt++) {
 
       const prompt = attempt === 0
-        ? `Analyze this food image and return ONLY valid JSON.`
-        : `STRICT: Return COMPLETE VALID JSON only. Do NOT cut response. Ensure JSON closes properly.`;
+        ? `
+You are a JSON API.
+
+Analyze the food image and respond ONLY in JSON.
+
+STRICT RULES:
+- NO explanation
+- NO extra text
+- ONLY JSON
+- JSON must start with { and end with }
+
+FORMAT:
+{
+  "food_name": string,
+  "ingredients": string[],
+  "nutrition": {
+    "calories": number,
+    "protein_g": number,
+    "fat_g": number,
+    "carbs_g": number,
+    "sugar_g": number,
+    "fiber_g": number
+  },
+  "health_recommendation": {
+    "should_consume": boolean,
+    "reason": string
+  }
+}
+`
+        : `STRICT: ONLY return VALID JSON. No text. Ensure JSON is complete and closed.`;
 
       for (const name of modelList) {
         try {
@@ -218,28 +243,31 @@ app.post('/api/analyze', async (req, res) => {
           });
 
           const response = await result.response;
-          text = response.text();
+          let text = response.text();
 
           if (!text) continue;
 
           // Clean markdown
           text = text.replace(/```json|```/g, "").trim();
 
-          // Extract JSON block
-          match = text.match(/\{[\s\S]*\}/);
+          // Extract JSON safely
+          const firstBrace = text.indexOf("{");
+          const lastBrace = text.lastIndexOf("}");
 
-          if (!match) {
+          if (firstBrace === -1 || lastBrace === -1) {
             console.log("⚠️ No JSON found, retrying...");
             continue;
           }
 
-          // ✅ REAL VALIDATION (MOST IMPORTANT FIX)
+          const jsonString = text.substring(firstBrace, lastBrace + 1);
+
+          // ✅ PARSE ONLY ONCE HERE
           try {
-            JSON.parse(match[0]);
+            data = JSON.parse(jsonString);
             success = true;
             break;
           } catch {
-            console.log("⚠️ Invalid JSON structure, retrying...");
+            console.log("⚠️ Invalid JSON, retrying...");
           }
 
         } catch (err) {
@@ -249,30 +277,22 @@ app.post('/api/analyze', async (req, res) => {
     }
 
     // ❌ FINAL FAILURE
-    if (!success || !match) {
-      console.error("❌ FINAL FAILURE:", text);
+    if (!success || !data) {
+      console.error("❌ FINAL FAILURE");
       return res.json(getFallback("AI response incomplete"));
     }
 
-    let data;
-
-    try {
-      data = JSON.parse(match[0]);
-    } catch (err) {
-      console.error("❌ JSON PARSE ERROR:", match[0]);
-      return res.json(getFallback("Parsing failed"));
-    }
-
+    // ✅ DIRECT RETURN (NO SECOND PARSE)
     return res.json(data);
 
   } catch (error) {
-    console.error('❌ AI Analysis Error:', error);
+    console.error("❌ AI ERROR:", error);
     return res.json(getFallback("Server error"));
   }
 });
 
 
-// ✅ FINAL FALLBACK (KEEP THIS)
+// ✅ FALLBACK
 function getFallback(reason) {
   return {
     food_name: "Unknown Food",
