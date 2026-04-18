@@ -9,7 +9,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
 
@@ -179,36 +179,23 @@ app.post('/api/analyze', async (req, res) => {
 
     console.log("🔍 Analyzing image...");
 
-    // ✅ MODEL FALLBACK SYSTEM (IMPORTANT)
     const modelList = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
-    let result;
-    let lastError;
+    let text = "";
+    let match = null;
+    let success = false;
 
-    for (const name of modelList) {
-      try {
-        console.log(`Trying model: ${name}`);
+    // 🔥 FULL RETRY SYSTEM
+    for (let attempt = 0; attempt < 2 && !success; attempt++) {
 
-        const model = genAI.getGenerativeModel({ model: name });
+      // 🔁 Change prompt slightly on retry
+      const prompt = attempt === 0
+        ? `Analyze this food image.
 
-        result = await model.generateContent({
-          contents: [{
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  data: base64Data,
-                  mimeType: "image/jpeg",
-                },
-              },
-              {
-                text: `
-Analyze this food image.
+Return ONLY VALID JSON.
+NO text outside JSON.
 
-Return ONLY a VALID JSON object.
-Do NOT include any explanation or extra text.
-
-STRICT FORMAT:
+FORMAT:
 {
   "food_name": string,
   "ingredients": string[],
@@ -224,45 +211,62 @@ STRICT FORMAT:
     "should_consume": boolean,
     "reason": string
   }
-}
+}`
+        : `STRICT: Return ONLY COMPLETE JSON. No explanation. Ensure JSON is closed properly with }.`;
 
-Ensure JSON is COMPLETE and properly closed.
-`
-              }
-            ]
-          }],
-          generationConfig: {
-            maxOutputTokens: 1000,
-            temperature: 0.2,
+      for (const name of modelList) {
+        try {
+          console.log(`Trying model: ${name} (attempt ${attempt + 1})`);
+
+          const model = genAI.getGenerativeModel({ model: name });
+
+          const result = await model.generateContent({
+            contents: [{
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    data: base64Data,
+                    mimeType: "image/jpeg",
+                  },
+                },
+                { text: prompt }
+              ]
+            }],
+            generationConfig: {
+              maxOutputTokens: 1000,
+              temperature: 0.2,
+            }
+          });
+
+          const response = await result.response;
+          text = response.text();
+
+          if (!text) continue;
+
+          // Clean markdown
+          text = text.replace(/```json|```/g, "").trim();
+
+          // Extract JSON safely
+          match = text.match(/\{[\s\S]*\}/);
+
+          if (match && match[0].endsWith("}")) {
+            success = true;
+            break;
           }
-        });
 
-        break; // ✅ success → stop loop
+          console.log("⚠️ Invalid JSON, retrying...");
 
-      } catch (err) {
-        console.log(`❌ Model failed: ${name}`, err.message);
-        lastError = err;
+        } catch (err) {
+          console.log(`❌ Model failed: ${name}`, err.message);
+        }
       }
     }
 
-    // ❌ All models failed
-    if (!result) {
-      console.error("❌ All models failed", lastError);
-      return res.json(getFallback("AI unavailable"));
-    }
-
-    const response = await result.response;
-    let text = response.text();
-
-    // ✅ Clean markdown
-    text = text.replace(/```json|```/g, "").trim();
-
-    // ✅ Extract JSON safely
-    const match = text.match(/\{[\s\S]*\}/);
-
-    if (!match) {
-      console.error("❌ INVALID AI RESPONSE:", text);
-      return res.json(getFallback("Invalid AI response"));
+    // ❌ FINAL FAIL
+    if (!success || !match) {
+      console.error("❌ FINAL FAILURE:", text);
+      return res.json(getFallback("AI response incomplete"));
     }
 
     let data;
@@ -274,7 +278,6 @@ Ensure JSON is COMPLETE and properly closed.
       return res.json(getFallback("Parsing failed"));
     }
 
-    // ✅ SUCCESS
     return res.json(data);
 
   } catch (error) {
@@ -284,7 +287,7 @@ Ensure JSON is COMPLETE and properly closed.
 });
 
 
-// ✅ GLOBAL FALLBACK FUNCTION
+// ✅ REQUIRED FALLBACK FUNCTION
 function getFallback(reason) {
   return {
     food_name: "Unknown Food",
